@@ -2048,6 +2048,98 @@ class QuerySetTest(unittest.TestCase):
 
         Group.drop_collection()
 
+    def test_query_inc_update(self):
+        """ Verify that the query 'inc' callback works. """
+
+        import decimal
+        from mongoengine import base
+
+        class DecimalIntField(base.BaseField):
+            def __init__(self, min_value=None, max_value=None, precision=2, rounding=None, **kwargs):
+                self.min_value, self.max_value, self.precision, self.rounding = min_value, max_value, precision, rounding
+                # Used later to round the decimal value when converting to an integer.
+                self.exponent = decimal.Decimal(1)  / 10**self.precision
+
+                super(DecimalIntField, self).__init__(**kwargs)
+
+            def to_python(self, value):
+                if not isinstance(value, int):
+                    value = int(value)
+
+                # Restore the decimal precision that was adjusted for when converting the decimal to an integer.
+                return decimal.Decimal(value) / (10**self.precision)
+
+            def to_mongo(self, value):
+                return self.format_value(value)
+
+            def validate(self, value):
+                try:
+                    value = int(value)
+                except:
+                    raise ValidationError('%s could not be converted to decimal int' % value)
+
+                if self.min_value is not None and value < self.min_value:
+                    raise ValidationError('Decimal integer value is too small')
+
+                if self.max_value is not None and value > self.max_value:
+                    raise ValidationError('Decimal integer is too large')
+
+            def format_value(self, value):
+              """ Convert the passed value to a decimal integer value for queries
+                including inc, dec and compares. It is a one way operation and will
+                not need to be reversed for this value.
+              """
+              if not isinstance(value, decimal.Decimal):
+                    value = decimal.Decimal(str(value))
+
+              return int(value.quantize(self.exponent, self.rounding) * (10**self.precision))
+
+            #  Create an alias for format_value. The alias will be called from queryset function.
+            prepare_inc_value = format_value
+
+            def prepare_query_value(self, op, value):
+                return self.format_value(value)
+
+        class DecimalInt(Document):
+            name   = StringField(required=True, max_length=10)
+            number = DecimalIntField(rounding=decimal.ROUND_HALF_UP)
+
+        DecimalInt.drop_collection()
+
+        DEC_PRECISON = 2
+        DEC_EXPONENT = decimal.Decimal(1) / 10**DEC_PRECISON
+        DEC_ROUNDING = decimal.ROUND_HALF_UP
+        TEST_DATA    = {"1.0":       decimal.Decimal("1.0"),
+                        "1.25":      decimal.Decimal("1.25"),
+                        "1.5":       decimal.Decimal("1.5"),
+                        "1.75":      decimal.Decimal("1.75"),
+                        "2.0":       decimal.Decimal("2.0"),
+                        "2.125":     decimal.Decimal("2.125"),
+                        "2.225":     decimal.Decimal("2.225"),
+                        "46352.63":  decimal.Decimal("46352.63"),
+                       }
+
+        for sNbr, dNbr in TEST_DATA.items():
+            DecimalInt(name=sNbr, number=dNbr).save()
+
+        for oNbr in DecimalInt.objects:
+            if oNbr.name in TEST_DATA:
+                dNow = oNbr.number
+                # Test the 'inc' code by changing the values back-n-forth.
+                DecimalInt.objects(id=oNbr.id).update_one(inc__number=1.23)
+                oNbr.reload()
+                DecimalInt.objects(id=oNbr.id).update_one(dec__number=1.26)
+                oNbr.reload()
+                DecimalInt.objects(id=oNbr.id).update_one(inc__number=0.03)
+                oNbr.reload()
+
+                # Compare the first decimal returned from the database to the manipulated database value.
+                self.assertTrue(dNow, oNbr.number)
+                # Compare to test data (which is rounded to match the above field to_mongo rounding.)
+                self.assertTrue(dNow, TEST_DATA[oNbr.name].quantize(DEC_EXPONENT, DEC_ROUNDING))
+
+        DecimalInt.drop_collection()
+
     def test_types_index(self):
         """Ensure that and index is used when '_types' is being used in a
         query.
