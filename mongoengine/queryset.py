@@ -1277,6 +1277,8 @@ class QuerySet(object):
                     value = field.prepare_query_value(op, value)
                 elif op in ('pushAll', 'pullAll'):
                     value = [field.prepare_query_value(op, v) for v in value]
+                elif op in ('inc') and hasattr(field, 'prepare_inc_value'):
+                    value = field.prepare_inc_value(op, value)
 
             key = '.'.join(parts)
 
