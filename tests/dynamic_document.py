@@ -1,13 +1,14 @@
 import unittest
 
 from mongoengine import *
-from mongoengine.connection import _get_db
+from mongoengine.connection import get_db
+
 
 class DynamicDocTest(unittest.TestCase):
 
     def setUp(self):
         connect(db='mongoenginetest')
-        self.db = _get_db()
+        self.db = get_db()
 
         class Person(DynamicDocument):
             name = StringField()
@@ -35,6 +36,15 @@ class DynamicDocTest(unittest.TestCase):
         # Confirm no changes to self.Person
         self.assertFalse(hasattr(self.Person, 'age'))
 
+    def test_dynamic_document_delta(self):
+        """Ensures simple dynamic documents can delta correctly"""
+        p = self.Person(name="James", age=34)
+        self.assertEquals(p._delta(), ({'_types': ['Person'], 'age': 34, 'name': 'James', '_cls': 'Person'}, {}))
+
+        p.doc = 123
+        del(p.doc)
+        self.assertEquals(p._delta(), ({'_types': ['Person'], 'age': 34, 'name': 'James', '_cls': 'Person'}, {'doc': 1}))
+
     def test_change_scope_of_variable(self):
         """Test changing the scope of a dynamic field has no adverse effects"""
         p = self.Person()
@@ -49,6 +59,33 @@ class DynamicDocTest(unittest.TestCase):
         p = self.Person.objects.get()
         self.assertEquals(p.misc, {'hello': 'world'})
 
+    def test_delete_dynamic_field(self):
+        """Test deleting a dynamic field works"""
+        self.Person.drop_collection()
+        p = self.Person()
+        p.name = "Dean"
+        p.misc = 22
+        p.save()
+
+        p = self.Person.objects.get()
+        p.misc = {'hello': 'world'}
+        p.save()
+
+        p = self.Person.objects.get()
+        self.assertEquals(p.misc, {'hello': 'world'})
+        collection = self.db[self.Person._get_collection_name()]
+        obj = collection.find_one()
+        self.assertEquals(sorted(obj.keys()), ['_cls', '_id', '_types', 'misc', 'name'])
+
+        del(p.misc)
+        p.save()
+
+        p = self.Person.objects.get()
+        self.assertFalse(hasattr(p, 'misc'))
+
+        obj = collection.find_one()
+        self.assertEquals(sorted(obj.keys()), ['_cls', '_id', '_types', 'name'])
+
     def test_dynamic_document_queries(self):
         """Ensure we can query dynamic fields"""
         p = self.Person()
@@ -60,6 +97,27 @@ class DynamicDocTest(unittest.TestCase):
         p = self.Person.objects(age=22)
         p = p.get()
         self.assertEquals(22, p.age)
+
+    def test_complex_dynamic_document_queries(self):
+        class Person(DynamicDocument):
+            name = StringField()
+
+        Person.drop_collection()
+
+        p = Person(name="test")
+        p.age = "ten"
+        p.save()
+
+        p1 = Person(name="test1")
+        p1.age = "less then ten and a half"
+        p1.save()
+
+        p2 = Person(name="test2")
+        p2.age = 10
+        p2.save()
+
+        self.assertEquals(Person.objects(age__icontains='ten').count(), 2)
+        self.assertEquals(Person.objects(age__gte=10).count(), 1)
 
     def test_complex_data_lookups(self):
         """Ensure you can query dynamic document dynamic fields"""
@@ -411,3 +469,31 @@ class DynamicDocTest(unittest.TestCase):
         doc.dict_field['embedded'].string_field = 'Hello World'
         self.assertEquals(doc._get_changed_fields(), ['dict_field.embedded.string_field'])
         self.assertEquals(doc._delta(), ({'dict_field.embedded.string_field': 'Hello World'}, {}))
+
+    def test_indexes(self):
+        """Ensure that indexes are used when meta[indexes] is specified.
+        """
+        class BlogPost(DynamicDocument):
+            meta = {
+                'indexes': [
+                    '-date',
+                    ('category', '-date')
+                ],
+            }
+
+        BlogPost.drop_collection()
+
+        info = BlogPost.objects._collection.index_information()
+        # _id, '-date', ('cat', 'date')
+        # NB: there is no index on _types by itself, since
+        # the indices on -date and tags will both contain
+        # _types as first element in the key
+        self.assertEqual(len(info), 3)
+
+        # Indexes are lazy so use list() to perform query
+        list(BlogPost.objects)
+        info = BlogPost.objects._collection.index_information()
+        info = [value['key'] for key, value in info.iteritems()]
+        self.assertTrue([('_types', 1), ('category', 1), ('date', -1)]
+                        in info)
+        self.assertTrue([('_types', 1), ('date', -1)] in info)

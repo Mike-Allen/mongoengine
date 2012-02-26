@@ -135,12 +135,33 @@ arguments can be set on all fields:
     When True, use this field as a primary key for the collection.
 
 :attr:`choices` (Default: None)
-    An iterable of choices to which the value of this field should be limited.
+    An iterable (e.g. a list or tuple) of choices to which the value of this
+    field should be limited.
+
+    Can be either be a nested tuples of value (stored in mongo) and a
+    human readable key ::
+
+        SIZE = (('S', 'Small'),
+                ('M', 'Medium'),
+                ('L', 'Large'),
+                ('XL', 'Extra Large'),
+                ('XXL', 'Extra Extra Large'))
+
+
+        class Shirt(Document):
+            size = StringField(max_length=3, choices=SIZE)
+
+    Or a flat iterable just containing values ::
+
+        SIZE = ('S', 'M', 'L', 'XL', 'XXL')
+
+        class Shirt(Document):
+            size = StringField(max_length=3, choices=SIZE)
 
 :attr:`help_text` (Default: None)
     Optional help text to output with the field - used by form libraries
 
-:attr:`verbose` (Default: None)
+:attr:`verbose_name` (Default: None)
     Optional human-readable name for the field - used by form libraries
 
 
@@ -455,8 +476,29 @@ subsequent calls to :meth:`~mongoengine.queryset.QuerySet.order_by`. ::
     first_post = BlogPost.objects.order_by("+published_date").first()
     assert first_post.title == "Blog Post #1"
 
+Shard keys
+==========
+
+If your collection is sharded, then you need to specify the shard key as a tuple,
+using the :attr:`shard_key` attribute of :attr:`-mongoengine.Document.meta`.
+This ensures that the shard key is sent with the query when calling the
+:meth:`~mongoengine.document.Document.save` or
+:meth:`~mongoengine.document.Document.update` method on an existing
+:class:`-mongoengine.Document` instance::
+
+    class LogEntry(Document):
+        machine = StringField()
+        app = StringField()
+        timestamp = DateTimeField()
+        data = StringField()
+
+        meta = {
+            'shard_key': ('machine', 'timestamp',)
+        }
+
 Document inheritance
 ====================
+
 To create a specialised type of a :class:`~mongoengine.Document` you have
 defined, you may subclass it and add any extra fields or methods you may need.
 As this is new class is not a direct subclass of
