@@ -10,6 +10,7 @@ from fixtures import Base, Mixin, PickleEmbedded, PickleTest
 
 from mongoengine import *
 from mongoengine.base import NotRegistered, InvalidDocumentError
+from mongoengine.queryset import InvalidQueryError
 from mongoengine.connection import get_db
 
 
@@ -633,6 +634,26 @@ class DocumentTest(unittest.TestCase):
 
         BlogPost.drop_collection()
 
+    def test_explicit_geo2d_index(self):
+        """Ensure that geo2d indexes work when created via meta[indexes]
+        """
+        class Place(Document):
+            location = DictField()
+            meta = {
+                'indexes': [
+                    '*location.point',
+                ],
+            }
+        Place.drop_collection()
+
+        info = Place.objects._collection.index_information()
+        # Indexes are lazy so use list() to perform query
+        list(Place.objects)
+        info = Place.objects._collection.index_information()
+        info = [value['key'] for key, value in info.iteritems()]
+
+        self.assertTrue([('location.point', '2d')] in info)
+
     def test_dictionary_indexes(self):
         """Ensure that indexes are used when meta[indexes] contains dictionaries
         instead of lists.
@@ -692,7 +713,6 @@ class DocumentTest(unittest.TestCase):
         info = Person.objects._collection.index_information()
         self.assertEqual(info.keys(), ['_types_1_user_guid_1', '_id_', '_types_1_name_1'])
         Person.drop_collection()
-
 
     def test_embedded_document_index(self):
         """Tests settings an index on an embedded document
@@ -766,6 +786,34 @@ class DocumentTest(unittest.TestCase):
             location = GeoPointField()
 
         self.assertEquals(len(User._geo_indices()), 2)
+
+    def test_covered_index(self):
+        """Ensure that covered indexes can be used
+        """
+
+        class Test(Document):
+            a = IntField()
+
+            meta = {
+                'indexes': ['a'],
+                'allow_inheritance': False
+                }
+
+        Test.drop_collection()
+
+        obj = Test(a=1)
+        obj.save()
+
+        # Need to be explicit about covered indexes as mongoDB doesn't know if
+        # the documents returned might have more keys in that here.
+        query_plan = Test.objects(id=obj.id).exclude('a').explain()
+        self.assertFalse(query_plan['indexOnly'])
+
+        query_plan = Test.objects(id=obj.id).only('id').explain()
+        self.assertTrue(query_plan['indexOnly'])
+
+        query_plan = Test.objects(a=1).only('a').exclude('id').explain()
+        self.assertTrue(query_plan['indexOnly'])
 
     def test_hint(self):
 
@@ -1410,6 +1458,12 @@ class DocumentTest(unittest.TestCase):
             person.update()
 
         self.assertRaises(OperationError, update_no_value_raises)
+
+        def update_no_op_raises():
+            person = self.Person.objects.first()
+            person.update(name="Dan")
+
+        self.assertRaises(InvalidQueryError, update_no_op_raises)
 
     def test_embedded_update(self):
         """
@@ -2235,6 +2289,22 @@ class DocumentTest(unittest.TestCase):
         self.assertEqual(author.age, 25)
 
         BlogPost.drop_collection()
+
+    def test_cannot_perform_joins_references(self):
+
+        class BlogPost(Document):
+            author = ReferenceField(self.Person)
+            author2 = GenericReferenceField()
+
+        def test_reference():
+            list(BlogPost.objects(author__name="test"))
+
+        self.assertRaises(InvalidQueryError, test_reference)
+
+        def test_generic_reference():
+            list(BlogPost.objects(author2__name="test"))
+
+        self.assertRaises(InvalidQueryError, test_generic_reference)
 
     def test_duplicate_db_fields_raise_invalid_document_error(self):
         """Ensure a InvalidDocumentError is thrown if duplicate fields

@@ -783,3 +783,30 @@ class FieldTest(unittest.TestCase):
         root = root.reload()
         self.assertEquals(root.children, [company])
         self.assertEquals(company.parents, [root])
+
+    def test_dict_in_dbref_instance(self):
+
+        class Person(Document):
+            name = StringField(max_length=250, required=True)
+
+        class Room(Document):
+            number = StringField(max_length=250, required=True)
+            staffs_with_position = ListField(DictField())
+
+        Person.drop_collection()
+        Room.drop_collection()
+
+        bob = Person.objects.create(name='Bob')
+        bob.save()
+        sarah = Person.objects.create(name='Sarah')
+        sarah.save()
+
+        room_101 = Room.objects.create(number="101")
+        room_101.staffs_with_position = [
+            {'position_key': 'window', 'staff': sarah},
+            {'position_key': 'door', 'staff': bob.to_dbref()}]
+        room_101.save()
+
+        room = Room.objects.first().select_related()
+        self.assertEquals(room.staffs_with_position[0]['staff'], sarah)
+        self.assertEquals(room.staffs_with_position[1]['staff'], bob)

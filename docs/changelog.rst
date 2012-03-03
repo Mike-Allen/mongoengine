@@ -2,9 +2,16 @@
 Changelog
 =========
 
-Changes in dev
+Changes in 0.6
 ==============
 
+- Added support for covered indexes when inheritance is off
+- No longer always upsert on save for items with a '_id'
+- Error raised if update doesn't have an operation
+- DeReferencing is now thread safe
+- Errors raised if trying to perform a join in a query
+- Updates can now take __raw__ queries
+- Added custom 2D index declarations
 - Added replicaSet connection support
 - Updated deprecated imports from pymongo (safe for pymongo 2.2)
 - Added uri support for connections

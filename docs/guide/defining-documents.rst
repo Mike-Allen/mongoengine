@@ -431,10 +431,31 @@ If a dictionary is passed then the following options are available:
 :attr:`unique` (Default: False)
     Whether the index should be sparse.
 
-.. note::
+.. warning::
 
-   Geospatial indexes will be automatically created for all
-   :class:`~mongoengine.GeoPointField`\ s
+
+   Inheritance adds extra indices.
+   If don't need inheritance for a document turn inheritance off - see :ref:`document-inheritance`.
+
+
+Geospatial indexes
+---------------------------
+Geospatial indexes will be automatically created for all
+:class:`~mongoengine.GeoPointField`\ s
+
+It is also possible to explicitly define geospatial indexes. This is
+useful if you need to define a geospatial index on a subfield of a
+:class:`~mongoengine.DictField` or a custom field that contains a
+point. To create a geospatial index you must prefix the field with the
+***** sign. ::
+
+    class Place(Document):
+        location = DictField()
+        meta = {
+            'indexes': [
+                '*location.point',
+            ],
+        }
 
 Ordering
 ========
@@ -495,6 +516,8 @@ This ensures that the shard key is sent with the query when calling the
         meta = {
             'shard_key': ('machine', 'timestamp',)
         }
+
+.. _document-inheritance:
 
 Document inheritance
 ====================

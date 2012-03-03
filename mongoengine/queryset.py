@@ -273,16 +273,20 @@ class Q(QNode):
 
 class QueryFieldList(object):
     """Object that handles combinations of .only() and .exclude() calls"""
-    ONLY = True
-    EXCLUDE = False
+    ONLY = 1
+    EXCLUDE = 0
 
     def __init__(self, fields=[], value=ONLY, always_include=[]):
         self.value = value
         self.fields = set(fields)
         self.always_include = set(always_include)
+        self._id = None
 
     def as_dict(self):
-        return dict((field, self.value) for field in self.fields)
+        field_list = dict((field, self.value) for field in self.fields)
+        if self._id is not None:
+            field_list['_id'] = self._id
+        return field_list
 
     def __add__(self, f):
         if not self.fields:
@@ -297,6 +301,9 @@ class QueryFieldList(object):
         elif self.value is self.EXCLUDE and f.value is self.ONLY:
             self.value = self.ONLY
             self.fields = f.fields - self.fields
+
+        if '_id' in f.fields:
+            self._id = f.value
 
         if self.always_include:
             if self.value is self.ONLY and self.fields:
@@ -399,12 +406,14 @@ class QuerySet(object):
         index_list = []
         use_types = doc_cls._meta.get('allow_inheritance', True)
         for key in spec['fields']:
-            # Get direction from + or -
+            # Get ASCENDING direction from +, DESCENDING from -, and GEO2D from *
             direction = pymongo.ASCENDING
             if key.startswith("-"):
                 direction = pymongo.DESCENDING
-            if key.startswith(("+", "-")):
-                    key = key[1:]
+            elif key.startswith("*"):
+                direction = pymongo.GEO2D
+            if key.startswith(("+", "-", "*")):
+                key = key[1:]
 
             # Use real field name, do it manually because we need field
             # objects for the next part (list field checking)
@@ -421,7 +430,7 @@ class QuerySet(object):
         # If _types is being used, prepend it to every specified index
         index_types = doc_cls._meta.get('index_types', True)
         allow_inheritance = doc_cls._meta.get('allow_inheritance')
-        if spec.get('types', index_types) and allow_inheritance and use_types:
+        if spec.get('types', index_types) and allow_inheritance and use_types and direction is not pymongo.GEO2D:
             index_list.insert(0, ('_types', 1))
 
         spec['fields'] = index_list
@@ -608,6 +617,9 @@ class QuerySet(object):
                     raise InvalidQueryError('Cannot resolve field "%s"'
                                                 % field_name)
             else:
+                from mongoengine.fields import ReferenceField, GenericReferenceField
+                if isinstance(field, (ReferenceField, GenericReferenceField)):
+                    raise InvalidQueryError('Cannot perform join in mongoDB: %s' % '__'.join(parts))
                 # Look up subfield on the previous field
                 new_field = field.lookup_member(field_name)
                 from base import ComplexBaseField
@@ -743,6 +755,7 @@ class QuerySet(object):
 
         .. versionadded:: 0.3
         """
+        self.limit(2)
         self.__call__(*q_objs, **query)
         try:
             result1 = self.next()
@@ -1090,8 +1103,8 @@ class QuerySet(object):
         .. versionadded:: 0.4
         .. versionchanged:: 0.5 - Fixed handling references
         """
-        from dereference import dereference
-        return dereference(self._cursor.distinct(field), 1)
+        from dereference import DeReference
+        return DeReference()(self._cursor.distinct(field), 1)
 
     def only(self, *fields):
         """Load only a subset of this document's fields. ::
@@ -1277,6 +1290,9 @@ class QuerySet(object):
 
         mongo_update = {}
         for key, value in update.items():
+            if key == "__raw__":
+                mongo_update.update(value)
+                continue
             parts = key.split('__')
             # Check for an operator and transform to mongo-style if there is
             op = None
@@ -1326,11 +1342,14 @@ class QuerySet(object):
 
             key = '.'.join(parts)
 
+            if not op:
+                raise InvalidQueryError("Updates must supply an operation eg: set__FIELD=value")
+
             if op:
                 value = {key: value}
                 key = '$' + op
 
-            if op is None or key not in mongo_update:
+            if key not in mongo_update:
                 mongo_update[key] = value
             elif key in mongo_update and isinstance(mongo_update[key], dict):
                 mongo_update[key].update(value)
@@ -1741,10 +1760,10 @@ class QuerySet(object):
 
         .. versionadded:: 0.5
         """
-        from dereference import dereference
+        from dereference import DeReference
         # Make select related work the same for querysets
         max_depth += 1
-        return dereference(self, max_depth=max_depth)
+        return DeReference()(self, max_depth=max_depth)
 
 
 class QuerySetManager(object):
